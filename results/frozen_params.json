@@ -1,0 +1,172 @@
+{
+  "provenance": {
+    "reference_definition": "challenge_aligned_addendum_8_hold_rule",
+    "t_hold_seconds": 1.5,
+    "t_hold_frames": 38,
+    "date": "2026-10-22",
+    "git_commit": "b8a6f043a2634450010535216f5ae00cbbded270",
+    "git_dirty": true,
+    "script": "scripts/mtah2027/evaluate_devset.py",
+    "script_hashes": {
+      "evaluate_devset_sha256": "dcfae2c88a7dc74f0a4ad29fc29e4f8caf3fbdc11714df89c638baa8d1553059",
+      "build_devset_sha256": "7218f8eebdcf56b129c982c44288db38a92d5b74c76f01192e812ee75ec3371e"
+    },
+    "validation_scheme": "5_fold_match_grouped_lomo_cv",
+    "tuning_grid": {
+      "stillness_speeds": [
+        0.8,
+        1.0,
+        1.2
+      ],
+      "stillness_frames": [
+        25,
+        38,
+        50
+      ],
+      "min_spell_frames": [
+        50,
+        75,
+        100,
+        125
+      ],
+      "presets": [
+        "Moderate",
+        "Conservative",
+        "Aggressive"
+      ],
+      "preset_parameters": {
+        "Moderate": {
+          "p_turnover": 0.005,
+          "p_dead_trans": 0.01,
+          "p_restart": 0.02
+        },
+        "Conservative": {
+          "p_turnover": 0.002,
+          "p_dead_trans": 0.005,
+          "p_restart": 0.02
+        },
+        "Aggressive": {
+          "p_turnover": 0.01,
+          "p_dead_trans": 0.02,
+          "p_restart": 0.02
+        }
+      },
+      "n_configurations_total": 108
+    },
+    "selection_criterion": "max mean in-sample spellF1, aligned reference, all 10 halves",
+    "reference_development_score": {
+      "aligned_reference_oof_spell_f1": 0.4573,
+      "aligned_reference_best_baseline": {
+        "model": "baseline_smooth50",
+        "spell_f1": 0.3182
+      },
+      "raw_dfl_reference_oof_spell_f1": 0.386,
+      "raw_dfl_reference_best_baseline": {
+        "model": "baseline_smooth50",
+        "spell_f1": 0.2829
+      },
+      "aligned_in_sample_spell_f1": 0.4573,
+      "raw_dfl_in_sample_spell_f1": 0.386
+    },
+    "m4_candidate_selection": {
+      "milestone": "M4",
+      "alpha_known": 0.6,
+      "gamma_gap": 0.1,
+      "modal_fold_count": 2,
+      "total_folds": 5,
+      "selection_rule": "modal outer fold choice on widened grid alpha in [0.6, 1.0], gamma in [0.0, 0.5], ties broken by mean inner out-of-sample spellF1 (Note N-M4.1)",
+      "mean_m3_spell_f1": 0.5041,
+      "mean_m2_spell_f1": 0.4573,
+      "mean_paired_delta": 0.0468,
+      "std_paired_delta": 0.0394,
+      "raw_dfl_mean_delta": 0.0241,
+      "positive_folds": 5,
+      "negative_folds": 0
+    },
+    "grid_corner_edge": "msf=50 (lower bound); Aggressive preset (tuning boundary); speed_threshold_mps=1.2 m/s (upper bound); min_still_frames=50 frames (upper bound); pre-registered grid boundaries cannot be widened post-reads (Plan D4.20)"
+  },
+  "parameters": {
+    "min_spell_frames": 50,
+    "p_turnover": 0.01,
+    "p_dead_trans": 0.02,
+    "p_restart": 0.02,
+    "speed_threshold_mps": 1.2,
+    "min_still_frames": 50,
+    "max_gap_frames": 10,
+    "dead_evidence_prob": 0.85,
+    "alpha_known": 0.6,
+    "gamma_gap": 0.1
+  },
+  "fold_selections": [
+    {
+      "fold": 1,
+      "test_match": "J03WMX",
+      "selected_params": {
+        "p_turnover": 0.01,
+        "p_dead_trans": 0.02,
+        "p_restart": 0.02,
+        "min_spell_frames": 50,
+        "speed_threshold_mps": 1.2,
+        "min_still_frames": 50,
+        "preset_name": "Aggressive"
+      },
+      "best_train_spell_f1": 0.4479268106791522
+    },
+    {
+      "fold": 2,
+      "test_match": "J03WOH",
+      "selected_params": {
+        "p_turnover": 0.01,
+        "p_dead_trans": 0.02,
+        "p_restart": 0.02,
+        "min_spell_frames": 50,
+        "speed_threshold_mps": 1.2,
+        "min_still_frames": 50,
+        "preset_name": "Aggressive"
+      },
+      "best_train_spell_f1": 0.4537405482239817
+    },
+    {
+      "fold": 3,
+      "test_match": "J03WOY",
+      "selected_params": {
+        "p_turnover": 0.01,
+        "p_dead_trans": 0.02,
+        "p_restart": 0.02,
+        "min_spell_frames": 50,
+        "speed_threshold_mps": 1.2,
+        "min_still_frames": 50,
+        "preset_name": "Aggressive"
+      },
+      "best_train_spell_f1": 0.4726899899267109
+    },
+    {
+      "fold": 4,
+      "test_match": "J03WPY",
+      "selected_params": {
+        "p_turnover": 0.01,
+        "p_dead_trans": 0.02,
+        "p_restart": 0.02,
+        "min_spell_frames": 50,
+        "speed_threshold_mps": 1.2,
+        "min_still_frames": 50,
+        "preset_name": "Aggressive"
+      },
+      "best_train_spell_f1": 0.4567547924298485
+    },
+    {
+      "fold": 5,
+      "test_match": "J03WQQ",
+      "selected_params": {
+        "p_turnover": 0.01,
+        "p_dead_trans": 0.02,
+        "p_restart": 0.02,
+        "min_spell_frames": 50,
+        "speed_threshold_mps": 1.2,
+        "min_still_frames": 50,
+        "preset_name": "Aggressive"
+      },
+      "best_train_spell_f1": 0.4554463059916343
+    }
+  ]
+}

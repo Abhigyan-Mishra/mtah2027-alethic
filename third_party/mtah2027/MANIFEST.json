@@ -1,0 +1,24 @@
+{
+  "upstream_repository": "https://github.com/metrica-sports/more-than-a-hack-2027",
+  "upstream_commit": "3de6b60aeabd2475d95879a651d38b72bc4fba00",
+  "vendored_date": "2026-10-20",
+  "purpose": "More Than A Hack 2027 official evaluation metric and verification machinery (Milestone M0).",
+  "rule": "verbatim; never edit; drift fails tests/test_mtah2027_evaluator_drift.py",
+  "files": {
+    "games.py": {
+      "sha256": "3b2122794e9e0476e2b3a871d14880e5fa47c4feaeacf99caef054c2309076ce"
+    },
+    "LICENSE": {
+      "sha256": "b1f93728571a232a0e158abdd869891f2efd51894134fb20678292c2468ff3ec"
+    },
+    "possession_metrics.py": {
+      "sha256": "341bad48904b489d6e875397b27687f5d6a4d22a397f3dc8af3a00d48f16874d"
+    },
+    "run_evaluation.py": {
+      "sha256": "1c61564fe52499ba4af3006fb5eb4147b825e92bf516651add80de49d267b19f"
+    },
+    "validate_submission.py": {
+      "sha256": "07ac29499acbd337e1dc1de1832d63f6e1fa1d981e22f6ad08212529e2bbee14"
+    }
+  }
+}

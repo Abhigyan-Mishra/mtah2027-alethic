@@ -1,0 +1,73 @@
+{
+  "feature_names": [
+    "centroid_x_home",
+    "centroid_x_away",
+    "centroid_vx_home",
+    "centroid_vx_away",
+    "width_ratio",
+    "length_ratio",
+    "def_line_height_home",
+    "def_line_height_away",
+    "opp_half_share_home",
+    "opp_half_share_away",
+    "compactness_diff",
+    "last_ball_x",
+    "last_ball_owner_sign",
+    "gap_elapsed_s"
+  ],
+  "rounding_decimals": 6,
+  "bias": 0.219222,
+  "weights": [
+    0.792556,
+    0.131026,
+    0.962864,
+    -0.849902,
+    -0.252791,
+    -0.113145,
+    0.278448,
+    -0.454014,
+    0.399841,
+    -0.213858,
+    1.481415,
+    -2.815778,
+    0.771128,
+    -0.012107
+  ],
+  "means": [
+    -2.091037,
+    -3.479528,
+    0.05515,
+    -0.025624,
+    1.064986,
+    1.065877,
+    36.426986,
+    35.770136,
+    0.450613,
+    0.433676,
+    0.31252,
+    -0.012659,
+    0.022052,
+    0.031925
+  ],
+  "stds": [
+    17.0372,
+    17.033602,
+    1.9389,
+    1.944478,
+    0.325043,
+    0.394242,
+    15.773076,
+    15.559113,
+    0.32522,
+    0.318172,
+    4.278762,
+    26.097914,
+    0.820597,
+    0.052192
+  ],
+  "parameters": {
+    "lambda_l2": 1.0,
+    "max_iter": 50,
+    "tol": 1e-06
+  }
+}

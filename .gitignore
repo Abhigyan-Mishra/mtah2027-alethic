@@ -1,0 +1,6 @@
+data/**
+*.mp4
+results/*.csv
+__pycache__/
+*.pyc
+!requirements.txt
