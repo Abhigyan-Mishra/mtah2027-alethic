@@ -1,16 +1,16 @@
 # Technical Report: Physics-Constrained Hidden Markov Model with Collective Spatial Formation Priors for Multi-Agent Soccer Possession Spell Identification
 
-**Team / Organization**: Alethic Labs  
+**Team**: Alethic  
 **Competition**: More Than A Hack 2027 (MTAH 2027) — Tactical Possession Tracking Track  
 **Date**: October 2026  
-**Repository**: [Alethic-Labs/vantage](https://github.com/Alethic-Labs/vantage)  
+**Public code repository**: the URL submitted with this form (the repository contains no match data)  
 
 ---
 
 ## Abstract
 
 Identifying possession spells from broadcast and tactical optical tracking data in association football presents severe inverse inference challenges: severe ball occlusions (40.7% unobserved frames), anonymous tracklet fragmentation across dynamic slot permutations, and momentary duel flickers. We present a physics-constrained inference pipeline combining:
-1. deterministic physical dead-ball evidence extraction (out-of-bounds geometry, collective player stillness, and referee XML stoppage priors);
+1. deterministic physical dead-ball evidence extraction (out-of-bounds geometry, collective player stillness, and stoppage priors from Metrica's automatic Smart Tagging);
 2. an identity-free 14-dimensional collective team-shape spatial prior predicting team possession probabilities during unobserved ball gaps;
 3. a mathematically unified logit-space emission fusion operator that rigorously nests the baseline model at zero gap weighting; and
 4. an HMM Viterbi temporal decoder with minimum spell duration regularization.
@@ -22,6 +22,7 @@ Evaluated on the 5-match IDSSE development benchmark under nested leave-one-matc
 ## 1. Introduction & Task Definition
 
 In association football analytics, possession spells are foundational for tactical evaluation, expected threat ($xT$), defensive line height analysis, and collective pressing metrics. The More Than A Hack 2027 (MTAH 2027) challenge provides 25 Hz tactical optical tracking (`BAR-ATH_tactical_atd.txt`, 199,319 total frames, 158,857 graded frames) and requires classifying each frame into one of three mutually exclusive states:
+
 - **`H`**: Home team in possession (FC Barcelona);
 - **`A`**: Away team in possession (Athletic Club);
 - **`D`**: Dead ball (out of bounds, goal kick, corner kick, free kick, throw-in, penalty, kickoff, or stoppage).
@@ -32,6 +33,12 @@ The evaluation metric is **SpellF1**, which computes the harmonic mean of precis
 In raw tactical tracking, the ball is missing or untracked on 40.7% of graded frames (64,643 of 158,857 frames). Standard nearest-player heuristics either collapse into uninformative uniform priors ($[0.5, 0.5]$ emissions) during ball gaps or forward-fill stale player identities. Consequently, turnovers occurring while the ball is occluded or in flight are either entirely missed or delayed until ball tracking re-emerges, severely dragging down SpellF1 IoU overlap.
 
 ---
+
+### Assets Used and Dropped
+- **Used (provided game):** the automatic tactical tracking (`BAR-ATH_tactical_atd.txt`, `BAR-ATH_tactical_atd.xml`) and Metrica's automatic Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`), as inputs to the algorithm only.
+- **Dropped (provided game):** the two camera videos and the homography. They are not read by the pipeline.
+- **Public 5-minute ground truth:** used only to check that the pipeline runs end to end (Section 5). It was never used for training, tuning or selection.
+- **Training and tuning data:** five other matches from the public IDSSE dataset (Bundesliga, CC BY 4.0; Section 3). No data from the provided game, and no hand labels of any kind on it, were used.
 
 ## 2. Pipeline Architecture
 
@@ -44,7 +51,7 @@ The inference pipeline comprises six stages (S0 through S5):
 │                                                                        │
 │   ┌─────────────────────┐      ┌───────────────────────────────────┐   │
 │   │   Raw ATD Tracking  │      │     Smart Tagging Metadata XML    │   │
-│   │   (Positions & Ball)│      │     (Referee Event Stoppages)     │   │
+│   │   (Positions & Ball)│      │     (Automatic Stoppage Tags)     │   │
 │   └──────────┬──────────┘      └─────────────────┬─────────────────┘   │
 │              │                                   │                     │
 │              ▼                                   ▼                     │
@@ -91,7 +98,7 @@ The inference pipeline comprises six stages (S0 through S5):
 Dead-ball states (`D`) are declared strictly from physical and geometric evidence, never from ball absence alone (preventing false dead-ball attribution during long passes):
 1. **Out-of-Bounds Geometry**: Ball position outside pitch boundaries $|x| > 52.5\text{ m}$ or $|y| > 34.0\text{ m}$.
 2. **Collective Stillness**: Collective player speed threshold $v_{\text{team}} \le 1.2\text{ m/s}$ sustained for $\ge 50\text{ frames}$ ($2.0\text{ s}$).
-3. **Smart Tagging XML Priors**: High-confidence stoppage intervals parsed from referee event metadata.
+3. **Smart Tagging XML Priors**: High-confidence stoppage intervals parsed from Metrica's Smart Tagging file, which DATA.md describes as Metrica's automatic tactical annotation, generated from the video and tracking without manual review. It is used as an algorithmic input, as DATA.md and the FAQ allow; no human-produced data about the provided game is used.
 When dead-ball evidence is present, physical emission probability $p_D = 0.85$ is injected into the emission.
 
 ### Stage S3: Kinematic Proximity Controller
@@ -198,12 +205,27 @@ Under competition discipline, exactly one public read was allocated per mileston
 
 ---
 
+### Reproduction
+From a fresh clone of the public repository, with the challenge data bundle available locally (Python 3.13):
+```bash
+pip install -r requirements.txt
+python3 make_submission.py \
+  --atd-txt <data>/BAR-ATH_tactical_atd.txt \
+  --atd-xml <data>/BAR-ATH_tactical_atd.xml \
+  --smart-xml <data>/BAR-ATH_tactical_smart_tagging.xml \
+  --out-csv results/Alethic.csv
+python <challenge-repo>/evaluation/validate_submission.py results/Alethic.csv
+```
+The frozen parameters (`results/frozen_params.json`) and the shape-model weights (`results/shape_weights.json`) are committed, so this command regenerates the submitted file. The shape weights can themselves be retrained from public IDSSE data with `train_shape_model.py` (see README).
+
+---
+
 ## 8. Data Attribution, Software, and Governance
 
 - **Integrated Dataset of Spatiotemporal and Event Data (IDSSE)**:
   Bassek, M., Rein, R., Weber, H., Memmert, D. An integrated dataset of spatiotemporal and event data in elite soccer. *Scientific Data* 12, 195 (2025). https://doi.org/10.1038/s41597-025-04505-y. Licenced under Creative Commons Attribution 4.0 International (CC BY 4.0).
 - **More Than A Hack 2027 Challenge Data**:
-  Tactical optical tracking and event metadata provided by the MTAH 2027 competition organizers under challenge participation terms.
+  Automatic tactical tracking (ATD) and Metrica's automatic Smart Tagging for the provided match, supplied by the MTAH 2027 organisers under the challenge participation terms. No match data is redistributed in the code repository.
 - **External Data Compliance**:
   An official inquiry regarding the utilization of external IDSSE tracking data under MTAH 2027 `RULES.md` has been logged on the competition repository: [Issue #16](https://github.com/metrica-sports/more-than-a-hack-2027/issues/16).
 - **Open-Source Software**:
