@@ -1,232 +1,260 @@
-# Technical Report: Physics-Constrained Hidden Markov Model with Collective Spatial Formation Priors for Multi-Agent Soccer Possession Spell Identification
+# Possession Spells from Tactical Tracking: a Hidden Markov Model with Team-Shape Priors for Ball Gaps
 
-**Team**: Alethic  
-**Competition**: More Than A Hack 2027 (MTAH 2027) — Tactical Possession Tracking Track  
-**Date**: October 2026  
-**Public code repository**: the URL submitted with this form (the repository contains no match data)  
+**Team:** Alethic · **Challenge:** More Than A Hack 2027, Initial Challenge (tactical possession) · **Date:** November 2026\
+**Code:** the public repository submitted with this document (it contains no match data)
 
----
+> **Key results**
+>
+> - **Development set** (5 public IDSSE matches, nested leave-one-match-out): out-of-fold spellF1 rises from **0.457 to 0.504** (+0.047), and the gain is positive in **5 of 5** held-out matches.
+> - **Where the gain comes from:** better team assignment while the ball is not tracked. Gap-frame accuracy rises from 0.80 to 0.84, in 5 of 5 matches.
+> - **Provided game (public 5 minutes, sanity check only):** spellF1 0.5375 and macroF1 0.8118, in the same direction as the development set.
+> - **No hand labels and no human-produced data about the provided game.** The algorithm is deterministic and CPU-only, and one command regenerates the submitted file.
 
-## Abstract
+## Summary
 
-Identifying possession spells from broadcast and tactical optical tracking data in association football presents severe inverse inference challenges: severe ball occlusions (40.7% unobserved frames), anonymous tracklet fragmentation across dynamic slot permutations, and momentary duel flickers. We present a physics-constrained inference pipeline combining:
-1. deterministic physical dead-ball evidence extraction (out-of-bounds geometry, collective player stillness, and stoppage priors from Metrica's automatic Smart Tagging);
-2. an identity-free 14-dimensional collective team-shape spatial prior predicting team possession probabilities during unobserved ball gaps;
-3. a mathematically unified logit-space emission fusion operator that rigorously nests the baseline model at zero gap weighting; and
-4. an HMM Viterbi temporal decoder with minimum spell duration regularization.
+We label every frame of the provided game as home possession (H), away possession (A) or dead ball (D). The inputs are the automatic tactical tracking and Metrica's automatic Smart Tagging.
 
-Evaluated on the 5-match IDSSE development benchmark under nested leave-one-match-out cross-validation, the model improves out-of-fold SpellF1 from 0.4573 to 0.5041 ($\Delta = +0.0468 \pm 0.0394$, positive across 5 of 5 folds; $+0.0241$ and 3 of 5 folds positive against the raw DFL reference). The performance gain is primarily driven by resolving team assignment during ball gaps (gap-frame live accuracy improving from 0.796 to 0.839 across all 5 matches). Authorized single-read public evaluations on the competition target match (BAR-ATH) moved in the same direction (SpellF1 0.5375, MacroF1 0.8118) and are reported as transfer sanity checks on a small 17-possession slice with a $\pm 0.1$ noise floor. The entire pipeline is inspectable, reproducible via the public `kloppy` library, and bitwise parity-verified across all discovery halves.
+**The main difficulty is the ball.** It is untracked on 40.7% of graded frames (64,643 of 158,857). A nearest-player rule therefore has nothing to say for long stretches, and turnovers that happen while the ball is missing are found late or not at all.
 
----
+**Our pipeline has five parts:**
 
-## 1. Introduction & Task Definition
+1. **Dead-ball evidence.** It is declared only from positive physical evidence: the ball out of bounds, players collectively standing still, or Smart Tagging set-piece and goal restarts. A missing ball alone is never treated as dead.
+2. **A ball-proximity model** for frames where the ball is visible.
+3. **A 14-feature team-shape model** that estimates who has the ball from the two teams' formations when the ball is missing.
+4. **Logit-space fusion** of the two models. It reduces exactly to the ball-only baseline when the shape weight is zero.
+5. **A three-state HMM decoder** with Viterbi decoding and a minimum spell length.
 
-In association football analytics, possession spells are foundational for tactical evaluation, expected threat ($xT$), defensive line height analysis, and collective pressing metrics. The More Than A Hack 2027 (MTAH 2027) challenge provides 25 Hz tactical optical tracking (`BAR-ATH_tactical_atd.txt`, 199,319 total frames, 158,857 graded frames) and requires classifying each frame into one of three mutually exclusive states:
+**How we trained and selected.** Every learned weight and every selected parameter comes from five other matches in the public IDSSE dataset, under nested cross-validation. The provided game's public five minutes were read only to check that the pipeline works end to end, never to choose anything.
 
-- **`H`**: Home team in possession (FC Barcelona);
-- **`A`**: Away team in possession (Athletic Club);
-- **`D`**: Dead ball (out of bounds, goal kick, corner kick, free kick, throw-in, penalty, kickoff, or stoppage).
+## 1. Task and metric
 
-The evaluation metric is **SpellF1**, which computes the harmonic mean of precision and recall over contiguous possession intervals (spells) across varying Intersection-over-Union (IoU) thresholds $\tau \in \{0.1, 0.2, \dots, 0.9\}$ alongside frame-level **MacroF1**. Furthermore, competition rules enforce a 50-frame ($2.0\text{ s}$) minimum spell duration rule: any spell shorter than 50 frames is invalid and penalized.
+The provided game, BAR-ATH, has 199,319 frames at 25 Hz. Of these, 158,857 are graded: frames 11185–90651 in the first half and 110808–190197 in the second.
 
-### Key Observation & Failure Mode of Naive Approaches
-In raw tactical tracking, the ball is missing or untracked on 40.7% of graded frames (64,643 of 158,857 frames). Standard nearest-player heuristics either collapse into uninformative uniform priors ($[0.5, 0.5]$ emissions) during ball gaps or forward-fill stale player identities. Consequently, turnovers occurring while the ball is occluded or in flight are either entirely missed or delayed until ball tracking re-emerges, severely dragging down SpellF1 IoU overlap.
+| Label | Meaning |
+|:---:|:---|
+| `H` | Home team (FC Barcelona) in possession |
+| `A` | Away team (Athletic Club) in possession |
+| `D` | Dead ball: out of play, set-piece setup, or another stoppage |
+| `X` | No ground truth or abstain. It is never scored in the ground truth, and counts as a miss if predicted on a graded frame. |
 
----
+**Our output.** We write `H`, `A` or `D` on every graded frame and never `X`. On ungraded frames we write `D`; those frames are not scored.
 
-### Assets Used and Dropped
-- **Used (provided game):** the automatic tactical tracking (`BAR-ATH_tactical_atd.txt`, `BAR-ATH_tactical_atd.xml`) and Metrica's automatic Smart Tagging (`BAR-ATH_tactical_smart_tagging.xml`), as inputs to the algorithm only.
-- **Dropped (provided game):** the two camera videos and the homography. They are not read by the pipeline.
-- **Public 5-minute ground truth:** used only to check that the pipeline runs end to end (Section 5). It was never used for training, tuning or selection.
-- **Training and tuning data:** five other matches from the public IDSSE dataset (Bundesliga, CC BY 4.0; Section 3). No data from the provided game, and no hand labels of any kind on it, were used.
+**How submissions are ranked.**
 
-## 2. Pipeline Architecture
+- **SpellF1 (the ranking metric).** A possession spell is a maximal run of `H` or of `A`. Predicted spells are matched one-to-one to true spells of the same team by temporal IoU. SpellF1 is the F1 averaged over the IoU thresholds {0.3, 0.4, 0.5, 0.6, 0.7}; the 0.5 value is reported as the headline.
+- **MacroF1 (the first tie-break).** The per-frame F1 over {H, A, D}, as defined in the organisers' `evaluation/possession_metrics.py`.
 
-The inference pipeline comprises six stages (S0 through S5):
+## 2. Assets used and dropped
 
+| Asset (provided game) | Used? | How |
+|:---|:---:|:---|
+| Automatic tactical tracking, `BAR-ATH_tactical_atd.txt` | **Used** | Player and ball positions, the algorithm's only per-frame input |
+| Tracking metadata, `BAR-ATH_tactical_atd.xml` | **Used** | Pitch size, frame timing, team of each tracking slot |
+| Metrica's automatic Smart Tagging, `BAR-ATH_tactical_smart_tagging.xml` | **Used** | Start times of `SET PIECES` and `GOALS` tags, as dead-ball evidence |
+| Tactical and broadcast video | Dropped | Not read |
+| Homography | Dropped | Not read, because tracking is already in pitch coordinates |
+| Public 5-minute ground truth | Check only | Read to confirm the pipeline runs end to end (Section 7). Never used to train, tune or select. |
+
+The challenge data notes describe Smart Tagging as Metrica's automatic tactical annotation, generated without manual review, and the FAQ invites teams to use it. We use it only as an algorithmic input. No hand labels, no human-produced event data and no private ground truth for the provided game were used at any point.
+
+## 3. Training and development data
+
+**Source.** All training and tuning uses five complete Bundesliga matches from the public **IDSSE** dataset (Sportec/DFL tracking, CC BY 4.0): `J03WMX`, `J03WOH`, `J03WOY`, `J03WPY` and `J03WQQ`. None of them is the provided game.
+
+**Making IDSSE look like the challenge data.** IDSSE tracking is clean and identity-labelled, so we degraded it to match the challenge statistics, using `mtah2027/degradation.py`:
+
+- **Density-dependent ball dropout,** giving about 40.7% missing ball frames, as in the provided game;
+- **Anonymous tracklet fragmentation,** with a mean tracklet lifetime of 15 s.
+
+**Development reference.** Training labels come from the DFL possession data under a controlled hold rule ($T_{\text{hold}} = 1.5$ s, i.e. 38 frames), aligned to the challenge's possession convention. The raw, unsmoothed DFL possession is kept as a sensitivity check.
+
+**Held-out matches.** Two further IDSSE matches (`J03WN1`, `J03WR9`) are reserved for an unrelated study. The data loaders refuse them (`mtah2027/kloppy_prep.py`, `train_shape_model.py`), and they were never used to train or select this model.
+
+## 4. Approach
+
+<!-- PIPELINE-DIAGRAM -->
+```mermaid
+flowchart LR
+  A["ATD tracking<br/>txt + xml"] --> S0["S0 Ingest<br/>metres, slots, graded mask"]
+  S0 --> S1["S1 Short-gap bridge<br/>≤ 10 frames"]
+  T["Smart Tagging xml"] --> S2
+  S1 --> S2["S2 Dead-ball evidence<br/>out of bounds · stillness · restarts"]
+  S1 --> S3["S3 Ball proximity<br/>p_ball"]
+  S1 --> S4["S4 Team shape<br/>14 features → p_shape"]
+  S3 --> S5["S5 Logit fusion<br/>q_H"]
+  S4 --> S5
+  S5 --> S6["S6 HMM Viterbi {H, A, D}<br/>+ minimum spell 50 frames"]
+  S2 --> S6
+  S6 --> O["Alethic.csv<br/>199,319 rows"]
 ```
-┌────────────────────────────────────────────────────────────────────────┐
-│               Sovereign Engine MTAH 2027 Inference Pipeline             │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│   ┌─────────────────────┐      ┌───────────────────────────────────┐   │
-│   │   Raw ATD Tracking  │      │     Smart Tagging Metadata XML    │   │
-│   │   (Positions & Ball)│      │     (Automatic Stoppage Tags)     │   │
-│   └──────────┬──────────┘      └─────────────────┬─────────────────┘   │
-│              │                                   │                     │
-│              ▼                                   ▼                     │
-│     [S0: Ingest & Scale]            [S2: Dead-Ball Evidence]           │
-│     Corner-anchored coordinates     - Pitch bounds (|x| > L/2)         │
-│     Pitch dimensions (105m x 68m)   - Collective player stillness      │
-│              │                      - Smart Tagging event priors       │
-│              │                                   │                     │
-│              ▼                                   │                     │
-│     [S1: Ball Gap Bridge]                        │                     │
-│     Interpolate short gaps (<= 10 frames)        │                     │
-│              │                                   │                     │
-│              ├───────────────────┐               │                     │
-│              │ (Ball visible)    │ (Ball gap)    │                     │
-│              ▼                   ▼               │                     │
-│     [S3: Kinematics]     [S4: Team Shape]        │                     │
-│     Proximity & Speed    14 collective features  │                     │
-│     p_ball               p_shape                 │                     │
-│              │                   │               │                     │
-│              └─────────┬─────────┘               │                     │
-│                        │                         │                     │
-│                        ▼                         │                     │
-│     [S5: Unified Logit-Space Emission Fusion]    │                     │
-│     logit(q_H) = alpha * logit(p_ball) + ...     │                     │
-│     q_H = sigma(logit(q_H))                      │                     │
-│                        │                         │                     │
-│                        ▼                         ▼                     │
-│     [S5: 3-State HMM Viterbi Decoder with Physical Dead Evidence]      │
-│     States: {H, A, D} with switch hysteresis penalty                   │
-│                        │                                               │
-│                        ▼                                               │
-│     [S6: Minimum Spell Duration Regularization (>= 50 frames)]         │
-│                        │                                               │
-│                        ▼                                               │
-│             199,319 Graded Frame Submission                            │
-└────────────────────────────────────────────────────────────────────────┘
-```
+<!-- /PIPELINE-DIAGRAM -->
 
-### Stage S0 & S1: Ingest, Scaling, and Short Ball Gap Filling
-- **Coordinate System**: Scaled from ATD camera units to standardized corner-anchored coordinates $[0, L] \times [0, W]$ with $L = 105.0\text{ m}, W = 68.0\text{ m}$.
-- **Short Ball Gap Bridging**: Missing ball observations lasting $\le 10\text{ frames}$ ($0.4\text{ s}$) are bridged via cubic spline / linear interpolation. Longer occlusions ($> 10\text{ frames}$) are preserved strictly as unobserved gaps (`ball_known = False`).
+**S0: Ingest.**
 
-### Stage S2: Physical Dead-Ball Evidence Detection
-Dead-ball states (`D`) are declared strictly from physical and geometric evidence, never from ball absence alone (preventing false dead-ball attribution during long passes):
-1. **Out-of-Bounds Geometry**: Ball position outside pitch boundaries $|x| > 52.5\text{ m}$ or $|y| > 34.0\text{ m}$.
-2. **Collective Stillness**: Collective player speed threshold $v_{\text{team}} \le 1.2\text{ m/s}$ sustained for $\ge 50\text{ frames}$ ($2.0\text{ s}$).
-3. **Smart Tagging XML Priors**: High-confidence stoppage intervals parsed from Metrica's Smart Tagging file, which DATA.md describes as Metrica's automatic tactical annotation, generated from the video and tracking without manual review. It is used as an algorithmic input, as DATA.md and the FAQ allow; no human-produced data about the provided game is used.
-When dead-ball evidence is present, physical emission probability $p_D = 0.85$ is injected into the emission.
+- We read the ATD positions and metadata, in metres, with the pitch size taken from the XML.
+- Each tracking slot is assigned to its team; the home attack direction is inferred for each half (used in S4).
+- We build the graded-frame mask.
 
-### Stage S3: Kinematic Proximity Controller
-On frames where `ball_known == True`, player proximity $d_{i, \text{ball}}$ and Savitzky-Golay smoothed relative velocity $v_{i, \text{ball}}$ are evaluated across all active tracklets. Softmax temperature-scaled proximity yields $p_{\text{ball}} = P(H \mid \mathbf{x}_{\text{ball}}, \mathbf{X}_{\text{players}})$.
+**S1: Short-gap bridge.** Ball gaps of up to 10 frames (0.4 s) are filled by constant-velocity linear interpolation. Longer gaps stay unobserved and are handled by S4.
 
-### Stage S4: 14-Feature Collective Team-Shape Spatial Model
-During missing-ball gaps (`ball_known == False`), player spatial formations reveal possession intent: teams in possession expand horizontally and push defensive lines higher, while defending teams compress centrally. We extract 14 identity-free spatial features $\mathbf{z}_t \in \mathbb{R}^{14}$ strictly from anonymous outfield tracklets:
-1. `centroid_x_home`, `centroid_x_away`: Collective longitudinal centroid, signed by inferred canonical attack direction.
-2. `centroid_vx_home`, `centroid_vx_away`: Collective longitudinal velocity along attack direction.
-3. `width_ratio`: Ratio of 90th-to-10th percentile lateral spreads ($\text{width}_H / (\text{width}_A + \epsilon)$).
-4. `length_ratio`: Ratio of longitudinal team spreads.
-5. `def_line_height_home`, `def_line_height_away`: Distance of 2nd-deepest outfield player from defending goal line.
-6. `opp_half_share_home`, `opp_half_share_away`: Fraction of active outfield players in opponent's half.
-7. `compactness_diff`: Difference in radius of gyration ($R_H - R_A$).
-8. `last_ball_x`, `last_ball_owner_sign`, `gap_elapsed_s`: Ball location at gap onset, last known owner sign ($\pm 1$), and elapsed gap time (capped at $15\text{ s}$).
+**S2: Dead-ball evidence.** $p_D$ is the per-frame probability that the ball is dead. It starts at a base value of 0.02 and is raised only by positive evidence:
 
-The spatial model is fitted via Newton-Raphson Iteratively Reweighted Least Squares (IRLS) logistic regression with $L_2$ regularization ($\lambda = 1.0$), fixed iteration cap (50), tolerance $10^{-6}$, and stored feature standardization parameters, outputting $p_{\text{shape}} = P(H \mid \mathbf{z}_t)$.
+| Evidence | Trigger | $p_D$ |
+|:---|:---|:---:|
+| Out of bounds | The ball is more than 0.5 m beyond a line for 3 or more frames, or for 1 frame followed by a gap of 10 or more frames | 0.85 |
+| Collective stillness | Mean outfield speed is 1.2 m/s or less for 50 or more frames (2 s) | 0.90 |
+| Smart Tagging restart | The window [start − 2 s, start] of each `SET PIECES` or `GOALS` tag | 0.85 |
 
-### Stage S5: Unified Logit-Space Emission Fusion
-Emissions from ball kinematics and team-shape models are fused in logit space:
-$$\text{logit}(q_H) = \begin{cases} \alpha_{\text{known}} \cdot \text{logit}(p_{\text{ball}}) + (1 - \alpha_{\text{known}}) \cdot \text{logit}(p_{\text{shape}}), & \text{if } \text{ball\_known} = \text{True} \\ \gamma_{\text{gap}} \cdot \text{logit}(p_{\text{shape}}), & \text{if } \text{ball\_known} = \text{False} \end{cases}$$
-$$q_H = \sigma(\text{logit}(q_H)), \quad q_A = 1 - q_H$$
-Joint emissions with dead-ball evidence $p_D$:
-$$P(\mathbf{y}_t \mid H) = (1 - p_D) \cdot q_H, \quad P(\mathbf{y}_t \mid A) = (1 - p_D) \cdot q_A, \quad P(\mathbf{y}_t \mid D) = p_D$$
+A missing ball on its own never raises $p_D$. This prevents long passes and occlusions from being labelled dead.
 
-**Theoretical Invariant**: When $\gamma_{\text{gap}} = 0.0$ and $\alpha_{\text{known}} = 1.0$, $\text{logit}(q_H) = 0 \implies q_H = 0.50000000$ on gap frames, rigorously reproducing the M2 baseline bit-for-bit.
+**S3: Ball proximity.**
 
----
+- On frames with a ball position, $d_H$ and $d_A$ are the distances from the ball to the nearest tracked player of each team.
+- Player positions are first smoothed with a Savitzky–Golay filter (window 7, order 2).
+- Then $p_{\text{ball}} = \sigma\big((d_A - d_H)/r\big)$, with $r = 1.5$ m.
 
-## 3. Development Benchmark & Validation Protocol
+**S4: Team shape.** When the ball is missing, the two formations still show who has it. The team in possession spreads wide and pushes up; the defending team compresses. From anonymous outfield tracklets we compute 14 identity-free features:
 
-To guard against data leakage and overfitting, our development methodology enforces strict governance:
-- **5-Match IDSSE Development Set**: Five complete Bundesliga matches from the Sportec / IDSSE benchmark (`J03WMX`, `J03WOH`, `J03WOY`, `J03WPY`, `J03WQQ`), degraded with realistic ball dropout (40.7%) and tracklet fragmentation (mean lifetime 15 s).
-- **Dual References**: Models are evaluated against the challenge-aligned Addendum 8 controlled hold rule reference ($T_{\text{hold}} = 1.5\text{ s}$) as primary target, alongside the raw unsmoothed DFL reference as sensitivity benchmark.
-- **Nested Leave-One-Match-Out (LOMO) Cross-Validation**:
-  In each outer fold $k \in \{1, \dots, 5\}$, the shape model and candidate grid $(\alpha, \gamma)$ are trained and tuned strictly on the 4 remaining matches via an inner 4-fold cross-validation. The held-out match is scored strictly out-of-sample.
-- **Pre-Declared Candidate Selection Rule (Note N-M4.1)**:
-  The candidate parameter pair $(\alpha^*, \gamma^*)$ is selected as the modal choice across the 5 outer folds (with mean inner training SpellF1 as tie-breaker).
+- the longitudinal centroid and centroid velocity of each team, signed by attack direction (4 features);
+- the ratios of team width (10th–90th percentile spread) and team length (2);
+- the defensive-line height of each team, measured at the second-deepest outfield player (2);
+- each team's share of players in the opponent half (2);
+- the difference in radius of gyration (1);
+- the ball's last position, the sign of its last owner, and the elapsed gap time, capped at 15 s (3).
 
----
+An L2-regularised logistic regression ($\lambda = 1$, fitted by IRLS with 50 iterations and tolerance $10^{-6}$, on standardised features) gives $p_{\text{shape}} = P(H \mid \mathbf z_t)$. The weights are in `results/shape_weights.json`.
 
-## 4. Empirical Evaluation Results
+**S5: Logit-space fusion.** With $q_A = 1 - q_H$:
 
-### Nested Leave-One-Match-Out Development Set Results
+| Frame type | Fused home probability $q_H$ |
+|:---|:---|
+| Ball observed | $\operatorname{logit} q_H = \alpha \operatorname{logit} p_{\text{ball}} + (1-\alpha) \operatorname{logit} p_{\text{shape}}$ |
+| Ball missing | $\operatorname{logit} q_H = \gamma \operatorname{logit} p_{\text{shape}}$ |
 
-| Outer Fold | Held-Out Match | Selected $(\alpha, \gamma)$ | M2 OOF SpellF1 | M3 OOF SpellF1 | Paired $\Delta_{\text{M3 - M2}}$ | Raw DFL Reference $\Delta$ |
-|:---:|:---|:---:|:---:|:---:|:---:|:---:|
-| 1 | `J03WMX` | $\alpha=0.6, \gamma=0.1$ | 0.4949 | 0.5214 | **+0.0266** | -0.0043 |
-| 2 | `J03WOH` | $\alpha=0.6, \gamma=0.4$ | 0.4716 | 0.4726 | **+0.0010** | -0.0113 |
-| 3 | `J03WOY` | $\alpha=0.6, \gamma=0.5$ | 0.3958 | 0.4945 | **+0.0987** | +0.0713 |
-| 4 | `J03WPY` | $\alpha=0.6, \gamma=0.1$ | 0.4595 | 0.5348 | **+0.0753** | +0.0499 |
-| 5 | `J03WQQ` | $\alpha=0.6, \gamma=0.0$ | 0.4648 | 0.4970 | **+0.0322** | +0.0151 |
-| **MEAN** | **OVERALL** | **Modal: (0.6, 0.1)** | **0.4573** | **0.5041** | **+0.0468 ± 0.0394** | **+0.0241** |
+With $\alpha = 1$ and $\gamma = 0$, this reduces exactly to the ball-only model ($q_H = 0.5$ on gap frames), so the shape prior is a strict extension of the baseline.
 
-### Calibrated Claim Summary (Finding E-5)
-> "On the 5-match IDSSE development set, the final configuration improved nested out-of-fold spellF1 from 0.457 (M2) to 0.504 (+0.047; 5 of 5 folds, per-fold gain +0.001 to +0.099; +0.024 and 3 of 5 against the raw DFL reference). The improvement comes mainly from better team assignment during ball gaps (gap-frame accuracy 0.80 -> 0.84, 5 of 5). Public-slice reads (17 possessions) moved in the same direction and are reported as sanity checks."
+**S6: Decoding.**
 
-### Diagnostic In-Gap Turnover Analysis
-- **Gap-Frame Live Accuracy**: Consistently improves in 5 of 5 folds (M2: 75.3%–81.6% $\to$ M3: 81.7%–85.4%).
-- **In-Gap Turnover Recall**: Improves in 3 of 5 folds (up to 38.02%), with mean boundary timing error of $0.40\text{–}0.56\text{ s}$ ($\approx 10\text{–}14\text{ frames}$).
-- **Feature Ablation**: An 11-feature shape model without ball-memory features achieves 0.4750 SpellF1, indicating that collective outfield shape alone adds +0.0177 SpellF1 over M2 (0.4750 vs 0.4573), while the three ball-memory features add +0.0291 at the final configuration (0.5041 vs 0.4750).
+- **Emissions:** $P(\mathbf y_t \mid H) = (1-p_D)\,q_H$, $P(\mathbf y_t \mid A) = (1-p_D)\,q_A$, and $P(\mathbf y_t \mid D) = p_D$.
+- **Viterbi decoding** over the transition matrix below. Its low turnover probability stops duel flicker from creating spells.
+- **Minimum spell:** any `H` or `A` run shorter than 50 frames (2 s) is merged into its neighbours.
 
----
+Transition probabilities per frame ($p_t$ turnover, $p_d$ ball goes dead, $p_r$ restart):
 
-## 5. Public Target Evaluation & Transfer Sanity Checks
+| From → to | `H` | `A` | `D` |
+|:---:|:---:|:---:|:---:|
+| `H` | $1-p_t-p_d$ | $p_t$ | $p_d$ |
+| `A` | $p_t$ | $1-p_t-p_d$ | $p_d$ |
+| `D` | $p_r/2$ | $p_r/2$ | $1-p_r$ |
 
-Under competition discipline, exactly one public read was allocated per milestone on the official competition public ground truth target (`BAR-ATH_possession_gt_public.csv`, 7,500 frames / 17 possessions):
+**Frozen parameters** (`results/frozen_params.json`):
 
-| Milestone | Execution Commit SHA | SpellF1 Mean | MacroF1 | Headline SpellF1 (IoU=0.5) | Alive/Dead F1 | Note |
-|---|:---:|:---:|:---:|:---:|:---:|---|
-| **M0 Baseline** | `starter` | 0.4242 | 0.5812 | — | — | Baseline smooth125 |
-| **M1 Controller** | `fec63f5`* | 0.4324 | 0.6631 | 0.4865 | 0.8924 | Physical stillness + controller |
-| **M2 Dead-Ball** | `05d4c14`† | 0.4457 | 0.7601 | 0.5143 | 0.9262 | Full S2 dead-ball evidence |
-| **M3 Shape Fusion** | `0fcf8bc`‡ | 0.5294 | 0.8101 | 0.5882 | 0.9320 | S4 team shape ($\alpha=0.8, \gamma=0.3$) |
-| **M4 Freeze Candidate** | `ee5864c` | **0.5375** | **0.8118** | **0.6250** | **0.9367** | Widened LOMO candidate ($\alpha=0.6, \gamma=0.1$) |
-| **M5 Final Submission** | `5f8589b`§ | **0.5375** | **0.8118** | **0.6250** | **0.9367** | Frozen M4 candidate re-scored; identical CSV `eb3eae2e` |
+| Parameter | Value | Selected by |
+|:---|:---:|:---|
+| Turnover $p_t$, ball goes dead $p_d$, restart $p_r$ (per frame) | 0.01, 0.02, 0.02 | IDSSE grid of 108 configurations, match-grouped CV |
+| Stillness speed and duration | 1.2 m/s, 50 frames | same grid |
+| Minimum spell | 50 frames | same grid, {50, 75, 100, 125} |
+| Short-gap bridge, dead-ball evidence $p_D$ | 10 frames, 0.85 | fixed a priori |
+| Fusion weights $\alpha$, $\gamma$ | 0.6, 0.1 | nested LOMO (Section 6) |
 
-\* M1 record reconstructed on 2026-10-22 (Round 61 G-3).  
-† M2 ran on dirty working tree at commit `05d4c14`; read record committed subsequently at `11cba74`.  
-‡ M3 ran on commit `0fcf8bc`; read record committed subsequently at `5404f54`.  
-§ M5 ran on clean commit `5f8589b` with write-ahead sentinel; re-scored the frozen M4 candidate unchanged before competition quota exhaustion.
+## 5. Possession rules implemented
 
-**Transfer Sanity Disclaimer**: The 17-possession public slice (~5 minutes of match play) carries a $\pm 0.1$ noise floor. These reads were strictly never used for parameter selection, model searching, or post-hoc tuning. Milestone M5 re-scored the frozen M4 candidate file to verify cryptographic identity and reproducibility prior to challenge submission.
+| Rule | Implementation |
+|:---|:---|
+| A team is in possession while the ball is alive and it controls the ball | `H`/`A` from S3 when the ball is seen, and from S4 plus ball memory when it is not |
+| The ball is dead when out of play or during a restart or stoppage | `D` from S2: out of bounds, collective stillness, set-piece and goal restarts |
+| A missing ball does not mean the ball is dead | S2 never uses ball absence as evidence |
+| Momentary touches or duels do not change possession | HMM turnover probability $p_t = 0.01$ per frame, plus the minimum spell of 50 frames |
+| A spell never crosses half-time | Half-time and other ungraded frames are written as `D`, and shape features are computed separately for each half |
+| Every graded frame gets a label | No `X` on graded frames, enforced as an assertion in `make_submission.py` |
 
----
+## 6. Validation and results
 
-## 6. Limitations
+**Protocol.** We use nested leave-one-match-out cross-validation on the five IDSSE matches.
 
-1. **Target Evaluation Sample Size & Noise Floor**: The competition public evaluation slice consists of a single match (`BAR-ATH`) restricted to 17 possessions (~5 minutes / 7,500 frames), resulting in a wide $\pm 0.1$ noise floor. While transfer directionally aligns with the development benchmark, conclusions regarding competitive ranking cannot be drawn from the public slice alone.
-2. **Sensitivity to Ground Truth Reference**: Against the challenge-aligned Addendum 8 controlled hold reference ($T_{\text{hold}} = 1.5\text{ s}$), all 5 folds demonstrated positive gains ($\Delta = +0.0468 \pm 0.0394$). Against the raw unaligned DFL reference, the mean gain is $+0.0241$, with 3 of 5 folds positive and 2 folds showing slight negative deltas ($-0.0043$ and $-0.0113$), demonstrating sensitivity to turn-over boundary smoothing conventions.
-3. **Hyperparameter Boundary Behavior & Identifiability**: In nested LOMO cross-validation, $\alpha$ hit the lower grid boundary in 5 of 5 folds (0.8 on the initial M3 grid, 0.6 on the widened M4 grid), suggesting that raw kinematic ball proximity probabilities are overconfident during live play. Furthermore, $\gamma$ is weakly identified (optimal selections spanned 0.0 to 0.5 across folds), and the winning modal candidate $(0.6, 0.1)$ exhibited the lowest inner-fold training score among selected pairs. Lowering $\alpha$ further without internal probability calibration risks boundary-chasing overfitting.
-4. **Domain Shift in Simulated Degradation**: The development benchmark utilizes Bundesliga tracking from IDSSE with synthetic degradation (density-dependent ball dropout yielding ~40.7% missing frames, and 15-second mean tracklet fragmentation). While calibrated to observed competition statistics, synthetic degradation does not fully capture optical occlusion geometry, camera-pan ball losses, or Metrica-specific tracking anomalies.
-5. **Truncation of Match Halves**: To ensure uniform array dimensions during cross-validation, every half was truncated at 65,000 frames (~43.3 minutes). Consequently, the final minutes of normal time and all stoppage-time frames were excluded from model fitting and development evaluation.
+- **Inner loop:** in each outer fold, the shape model and the $(\alpha, \gamma)$ grid ($\alpha \in [0.6, 1.0]$, $\gamma \in [0, 0.5]$) are fitted and tuned on the other four matches only, by an inner 4-fold CV.
+- **Outer loop:** the held-out match is scored strictly out of sample.
+- **Final parameters:** the final pair is the modal fold choice. Ties are broken by mean inner out-of-sample spellF1, and this rule was fixed before the folds were run.
 
----
+**Results by fold.** M2 is the ball-only model and M3 adds the team-shape prior.
 
-## 7. Governance, Integrity, and Reproducibility
+| Fold | Held-out match | Selected $(\alpha,\gamma)$ | M2 spellF1 | M3 spellF1 | Δ (aligned ref.) | Δ (raw DFL ref.) |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 1 | `J03WMX` | (0.6, 0.1) | 0.4949 | 0.5214 | +0.0266 | −0.0043 |
+| 2 | `J03WOH` | (0.6, 0.4) | 0.4716 | 0.4726 | +0.0010 | −0.0113 |
+| 3 | `J03WOY` | (0.6, 0.5) | 0.3958 | 0.4945 | +0.0987 | +0.0713 |
+| 4 | `J03WPY` | (0.6, 0.1) | 0.4595 | 0.5348 | +0.0753 | +0.0499 |
+| 5 | `J03WQQ` | (0.6, 0.0) | 0.4648 | 0.4970 | +0.0322 | +0.0151 |
+| **Mean** | | **modal (0.6, 0.1)** | **0.4573** | **0.5041** | **+0.0468** (SD 0.0394) | **+0.0241** |
 
-1. **Confirmation Vault Isolation**: Matches `J03WN1` and `J03WR9` are excluded from all MTAH development and training by hard-coded allow-lists in `kloppy_prep.py` and `train_shape_model.py`, while the engine loader (`frames.py`) enforces the D4.6 confirmation vault guard (`check_vault_access`). (Note: These matches were unsealed once under an audited, registered unlock on 2026-10-24 solely for the independent WP2.2 physics vault read, but have never been accessed for MTAH model training or hyperparameter selection).
-2. **Public Kloppy Pipeline Parity**: The training pipeline is fully exportable and runnable using standard open-source `kloppy` without internal engine dependencies. Cryptographic parity across all 10 discovery halves is committed in `results/mtah2027/kloppy_parity.json`, with clean ball max diff $0.0$, degraded ball max diff $0.0$, label mismatches $0$, and exact SHA-256 weight reproduction:
-   `1d9837e42a5e1397095a550ff842cc95d3a597794dbf9dbabf95528432fec1bb`.
-3. **Data-Driven Quota Guard & Write-Ahead Sentinel**: Hard limit of $\le 5$ total public reads enforced dynamically. An atomic write-ahead sentinel (`m5_public_read.opened`) is created exclusively before reading ground truth data, ensuring that interrupted or crashed runs permanently count as consumed and strictly prevent repeat reads.
-4. **Zero-Emoji & Documentation Standards**: Strictly enforced across all code, tests, docstrings, and artifacts.
+**What drives the gain:**
 
----
+- **Gap-frame accuracy** (live frames with no ball) improves in 5 of 5 folds: from 75.3–81.6% for M2 to 81.7–85.4% for M3.
+- **Turnovers during gaps:** recall improves in 3 of 5 folds (up to 38.0%), with a mean boundary timing error of 0.40–0.56 s (10–14 frames).
+- **Ablation:**
+  - collective outfield shape alone (11 features, no ball memory) reaches 0.4750, which is +0.0177 over M2;
+  - the three ball-memory features add a further +0.0291.
 
-### Reproduction
-From a fresh clone of the public repository, with the challenge data bundle available locally (Python 3.13):
+## 7. Public five-minute checks
+
+The public slice (`BAR-ATH_possession_gt_public.csv`) covers 7,500 frames and 17 possessions, so its noise floor is about ±0.1 spellF1.
+
+- We allowed ourselves one read per milestone, under a hard cap of five reads enforced in code (`inspect_public_read_quota` in `make_submission.py`).
+- No read was used to pick a model or a parameter.
+
+| Milestone | Change | spellF1 | spellF1 @ IoU 0.5 | macroF1 | Alive/dead F1 |
+|:---|:---|:---:|:---:|:---:|:---:|
+| M0 | Smoothed baseline | 0.4242 | — | 0.5812 | — |
+| M1 | Controller + stillness | 0.4324 | 0.4865 | 0.6631 | 0.8924 |
+| M2 | Dead-ball evidence (S2) | 0.4457 | 0.5143 | 0.7601 | 0.9262 |
+| M3 | Shape fusion (0.8, 0.3) | 0.5294 | 0.5882 | 0.8101 | 0.9320 |
+| M4 | Wider grid (0.6, 0.1), **frozen** | **0.5375** | **0.6250** | **0.8118** | **0.9367** |
+| M5 | Frozen file re-scored | 0.5375 | 0.6250 | 0.8118 | 0.9367 |
+
+M4 and M5 score the same CSV, byte for byte. The change from M3 to M4 came from widening the $\alpha$ grid on IDSSE, where $\alpha$ had hit its lower bound. It did not come from the public read.
+
+## 8. Limitations
+
+1. **The public check is small.** It covers one match and 17 possessions (about ±0.1). It shows the direction of the effect, not a ranking.
+2. **The result depends on the reference definition.** Against the raw DFL reference, the mean gain falls to +0.0241, with 3 of 5 folds positive, because the boundary-smoothing convention matters.
+3. **Grid boundaries and identifiability:**
+   - $\alpha$ sat on the lower edge of its grid in every fold, which suggests that ball-proximity probabilities are over-confident;
+   - $\gamma$ is weakly identified (fold choices range from 0.0 to 0.5);
+   - the modal pair had the lowest inner score among the selected pairs;
+   - several HMM and dead-ball parameters also sit on grid edges.
+
+   We did not widen any grid further, to avoid chasing the boundary.
+4. **Simulated degradation.** Synthetic dropout and fragmentation on Bundesliga tracking cannot reproduce Metrica-specific occlusion geometry, ball loss during camera pans, or tracking artefacts.
+5. **Truncated halves in development.** Halves were truncated at 65,000 frames (about 43 min) for uniform arrays, so late and stoppage-time play was not used in training. The provided game is labelled in full.
+
+## 9. Reproduction
+
+You need Python 3.13 and a CPU (no GPU or network access at inference), plus the challenge data bundle stored locally, outside the repository.
+
 ```bash
-pip install -r requirements.txt
+python3.13 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt     # pinned: numpy, pandas, scipy, kloppy
 python3 make_submission.py \
-  --atd-txt <data>/BAR-ATH_tactical_atd.txt \
-  --atd-xml <data>/BAR-ATH_tactical_atd.xml \
+  --atd-txt   <data>/BAR-ATH_tactical_atd.txt \
+  --atd-xml   <data>/BAR-ATH_tactical_atd.xml \
   --smart-xml <data>/BAR-ATH_tactical_smart_tagging.xml \
-  --out-csv results/Alethic.csv
+  --out-csv   results/Alethic.csv
 python <challenge-repo>/evaluation/validate_submission.py results/Alethic.csv
+sha256sum results/Alethic.csv
 ```
-The frozen parameters (`results/frozen_params.json`) and the shape-model weights (`results/shape_weights.json`) are committed, so this command regenerates the submitted file. The shape weights can themselves be retrained from public IDSSE data with `train_shape_model.py` (see README).
 
----
+- **Expected output:** 199,320 lines (a `frame,label` header and 199,319 rows), with SHA-256 `eb3eae2eef4545b6f9aa06d237215f02f6b4ebbfdca7e8d686826e20ad2805f3`. That is the submitted file.
+- **Don't pass any override flag.** The frozen parameters and shape weights in `results/` are loaded by default.
+- **Retraining the shape weights from public IDSSE data:**
+  ```bash
+  python3 train_shape_model.py --sportec-dir <idsse_dir> --out-weights results/shape_weights.json
+  ```
+  This reproduces the committed `results/shape_weights.json` byte for byte (SHA-256 `1d9837e4…fec1bb`). We checked this on all ten development halves.
+- **Integrity check:** `sha256sum -c SUBMISSION_MANIFEST.sha256` verifies every file in the repository.
 
-## 8. Data Attribution, Software, and Governance
+## 10. Data, software and attribution
 
-- **Integrated Dataset of Spatiotemporal and Event Data (IDSSE)**:
-  Bassek, M., Rein, R., Weber, H., Memmert, D. An integrated dataset of spatiotemporal and event data in elite soccer. *Scientific Data* 12, 195 (2025). https://doi.org/10.1038/s41597-025-04505-y. Licenced under Creative Commons Attribution 4.0 International (CC BY 4.0).
-- **More Than A Hack 2027 Challenge Data**:
-  Automatic tactical tracking (ATD) and Metrica's automatic Smart Tagging for the provided match, supplied by the MTAH 2027 organisers under the challenge participation terms. No match data is redistributed in the code repository.
-- **External Data Compliance**:
-  An official inquiry regarding the utilization of external IDSSE tracking data under MTAH 2027 `RULES.md` has been logged on the competition repository: [Issue #16](https://github.com/metrica-sports/more-than-a-hack-2027/issues/16).
-- **Open-Source Software**:
-  Public tracking ingest and coordinate standardization are implemented via `kloppy` (v3.19.0, MIT Licence).
+- **IDSSE:** Bassek, M., Rein, R., Weber, H. and Memmert, D. (2025). *An integrated dataset of spatiotemporal and event data in elite soccer.* Scientific Data 12, 195. <https://doi.org/10.1038/s41597-025-04505-y>. Licensed CC BY 4.0.
+- **Challenge data:** the automatic tactical tracking and Metrica's automatic Smart Tagging for BAR-ATH, used under the MTAH 2027 participation terms. None of it is redistributed in the repository, and neither is any frame-level derivative.
+- **External data:** we asked the organisers to confirm that public external tracking (IDSSE) may be used for training: [issue #16](https://github.com/metrica-sports/more-than-a-hack-2027/issues/16).
+- **Software:** [kloppy](https://github.com/PySport/kloppy) 3.19.0 (MIT) for public tracking ingest. The organisers' evaluation code is vendored unmodified in `third_party/mtah2027/` under its MIT licence. Our code is MIT-licensed.
